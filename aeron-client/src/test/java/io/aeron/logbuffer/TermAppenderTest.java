@@ -16,25 +16,35 @@
 package io.aeron.logbuffer;
 
 import io.aeron.ReservedValueSupplier;
+import org.agrona.BitUtil;
+import org.agrona.concurrent.UnsafeBuffer;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.InOrder;
-import org.agrona.concurrent.UnsafeBuffer;
 
+import static io.aeron.logbuffer.FrameDescriptor.BEGIN_FRAG_FLAG;
+import static io.aeron.logbuffer.FrameDescriptor.END_FRAG_FLAG;
+import static io.aeron.logbuffer.FrameDescriptor.FRAME_ALIGNMENT;
+import static io.aeron.logbuffer.FrameDescriptor.PADDING_FRAME_TYPE;
+import static io.aeron.logbuffer.FrameDescriptor.flagsOffset;
+import static io.aeron.logbuffer.FrameDescriptor.typeOffset;
 import static io.aeron.logbuffer.LogBufferDescriptor.TERM_TAIL_COUNTERS_OFFSET;
 import static io.aeron.logbuffer.LogBufferDescriptor.rawTailVolatile;
+import static io.aeron.logbuffer.TermAppender.FAILED;
+import static io.aeron.logbuffer.TermAppender.TRIPPED;
 import static io.aeron.logbuffer.TermAppender.pack;
+import static io.aeron.protocol.DataHeaderFlyweight.HEADER_LENGTH;
 import static io.aeron.protocol.DataHeaderFlyweight.RESERVED_VALUE_OFFSET;
 import static io.aeron.protocol.DataHeaderFlyweight.createDefaultHeader;
 import static java.nio.ByteBuffer.allocateDirect;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
+import static org.agrona.BitUtil.SIZE_OF_LONG;
+import static org.agrona.BitUtil.align;
 import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertThat;
-import static org.mockito.Mockito.*;
-import static io.aeron.logbuffer.FrameDescriptor.*;
-import static io.aeron.logbuffer.TermAppender.TRIPPED;
-import static io.aeron.protocol.DataHeaderFlyweight.HEADER_LENGTH;
-import static org.agrona.BitUtil.*;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 
 public class TermAppenderTest
 {
@@ -153,6 +163,18 @@ public class TermAppenderTest
         inOrder.verify(headerWriter, times(1)).write(termBuffer, tailValue, frameLength, TERM_ID);
         inOrder.verify(termBuffer, times(1)).putShort(typeOffset(tailValue), (short)PADDING_FRAME_TYPE, LITTLE_ENDIAN);
         inOrder.verify(termBuffer, times(1)).putIntOrdered(tailValue, frameLength);
+    }
+
+    @Test
+    public void shouldFailAppendWithInsufficientRemainingCapacity() {
+        final int msgLength = BitUtil.align(Integer.MAX_VALUE - HEADER_LENGTH, HEADER_LENGTH) - HEADER_LENGTH;
+        final int tailValue = BitUtil.align(msgLength + HEADER_LENGTH, FRAME_ALIGNMENT);
+        final UnsafeBuffer buffer = new UnsafeBuffer(new byte[1]);
+        logMetaDataBuffer.putLong(TERM_TAIL_COUNTER_OFFSET, pack(TERM_ID, tailValue));
+        final long expectFailedResult = pack(TERM_ID, FAILED);
+        assertThat(termAppender.appendUnfragmentedMessage(headerWriter, buffer, 0, msgLength, RVS), is(expectFailedResult));
+        assertThat(termAppender.appendUnfragmentedMessage(headerWriter, buffer, 0, HEADER_LENGTH, RVS), is(expectFailedResult));
+        assertThat(termAppender.appendUnfragmentedMessage(headerWriter, buffer, 0, 1, RVS), is(expectFailedResult));
     }
 
     @Test
